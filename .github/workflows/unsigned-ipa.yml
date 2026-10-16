@@ -1,0 +1,70 @@
+name: Unsigned IPA
+
+# Builds ClaudeUIDemo (app + widget extension) for device as an unsigned IPA,
+# for sideload signing with a personal certificate. Artifact: ClaudeUIDemo-unsigned-ipa.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/unsigned-ipa.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      PROJECT: ClaudeUIDemo.xcodeproj
+      SCHEME: ClaudeUIDemo
+    defaults:
+      run:
+        working-directory: Examples/ClaudeUIDemo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Archive for device (unsigned)
+        run: |
+          set +e
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/ClaudeUIDemo.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            -skipMacroValidation -skipPackagePluginValidation \
+            2>&1 | tee "$RUNNER_TEMP/build.log" | tail -n 120
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "==== error lines ===="
+            grep -n " error: " "$RUNNER_TEMP/build.log" | head -40
+          fi
+          exit "$status"
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP=$(find "$RUNNER_TEMP/ClaudeUIDemo.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -print -quit 2>/dev/null || true)
+          if [ -z "$APP" ]; then echo "::error::No .app found in the archive"; exit 1; fi
+          echo "App bundle: $APP"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          (cd "$RUNNER_TEMP" && zip -qry ClaudeUIDemo-unsigned.ipa Payload)
+          ls -lh "$RUNNER_TEMP/ClaudeUIDemo-unsigned.ipa"
+          unzip -l "$RUNNER_TEMP/ClaudeUIDemo-unsigned.ipa" | head -25
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUIDemo-unsigned-ipa
+          path: ${{ runner.temp }}/ClaudeUIDemo-unsigned.ipa
+          if-no-files-found: error
